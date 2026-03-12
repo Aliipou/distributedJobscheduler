@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: scheduler
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: scheduler_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheduler"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: Dockerfile.scheduler
+    ports:
+      - "8080:8080"
+    environment:
+      POSTGRES_URL: postgres://scheduler:password@postgres:5432/scheduler_db?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      HTTP_PORT: "8080"
+      SCHEDULE_INTERVAL_SECONDS: "10"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: Dockerfile.worker
+    environment:
+      POSTGRES_URL: postgres://scheduler:password@postgres:5432/scheduler_db?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      WORKER_CONCURRENCY: "5"
+      WORKER_ID: "worker"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 3
+    restart: unless-stopped
+
+volumes:
+  pgdata:
