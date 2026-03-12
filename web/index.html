@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Distributed Job Scheduler</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; }
+    header { background: #1e293b; padding: 1rem 2rem; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 1.25rem; font-weight: 600; color: #38bdf8; }
+    .refresh-btn { background: #0284c7; color: white; border: none; padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.875rem; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 1.5rem 2rem; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .stat-card { background: #1e293b; border-radius: 10px; padding: 1.25rem; border: 1px solid #334155; }
+    .stat-card .label { font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-card .value { font-size: 2rem; font-weight: 700; margin-top: 0.25rem; }
+    .green { color: #34d399; }
+    .yellow { color: #fbbf24; }
+    .red { color: #f87171; }
+    .blue { color: #60a5fa; }
+    .section { background: #1e293b; border-radius: 10px; padding: 1.5rem; border: 1px solid #334155; margin-bottom: 1.5rem; }
+    .section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: #cbd5e1; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th { text-align: left; padding: 0.5rem 0.75rem; color: #64748b; font-weight: 500; border-bottom: 1px solid #334155; }
+    td { padding: 0.625rem 0.75rem; border-bottom: 1px solid #1e293b; }
+    tr:hover td { background: #263447; }
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+    .badge-active { background: #064e3b; color: #34d399; }
+    .badge-paused { background: #78350f; color: #fbbf24; }
+    .badge-deleted { background: #3f1515; color: #f87171; }
+    .badge-success { background: #064e3b; color: #34d399; }
+    .badge-failed { background: #3f1515; color: #f87171; }
+    .badge-running { background: #1e3a5f; color: #60a5fa; }
+    .badge-pending { background: #1c2333; color: #94a3b8; }
+    .badge-dead_letter { background: #3b0764; color: #c084fc; }
+    .form-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    input, select { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 0.5rem 0.75rem; border-radius: 6px; font-size: 0.875rem; flex: 1; min-width: 150px; }
+    .btn { padding: 0.5rem 1.25rem; border-radius: 6px; border: none; cursor: pointer; font-size: 0.875rem; font-weight: 500; }
+    .btn-primary { background: #0284c7; color: white; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-sm { padding: 0.25rem 0.6rem; font-size: 0.75rem; margin: 0 2px; }
+    .workers-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; }
+    .worker-card { background: #0f172a; border-radius: 8px; padding: 0.875rem; border: 1px solid #334155; }
+    .worker-card .worker-id { font-size: 0.8rem; font-weight: 600; color: #38bdf8; }
+    .worker-card .worker-host { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+    .worker-card .worker-jobs { font-size: 0.75rem; color: #94a3b8; margin-top: 4px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+    .dot-green { background: #34d399; }
+    #toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 0.75rem 1.25rem; font-size: 0.875rem; display: none; z-index: 999; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>⚡ Distributed Job Scheduler</h1>
+  <button class="refresh-btn" onclick="loadAll()">↻ Refresh</button>
+</header>
+<div class="container">
+  <!-- Stats -->
+  <div class="stats-grid" id="stats"></div>
+
+  <!-- Create Job -->
+  <div class="section">
+    <h2>Create Job</h2>
+    <div class="form-row">
+      <input id="job-name" placeholder="Job name" />
+      <input id="job-cron" placeholder="Cron (e.g. 0 */6 * * *)" />
+      <input id="job-cmd" placeholder="Command or http://..." />
+      <input id="job-retries" placeholder="Max retries" type="number" value="3" style="max-width:110px" />
+      <button class="btn btn-primary" onclick="createJob()">+ Create</button>
+    </div>
+  </div>
+
+  <!-- Jobs -->
+  <div class="section">
+    <h2>Jobs</h2>
+    <table>
+      <thead><tr><th>Name</th><th>Cron</th><th>Command</th><th>Status</th><th>Next Run</th><th>Actions</th></tr></thead>
+      <tbody id="jobs-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Executions -->
+  <div class="section">
+    <h2>Recent Executions</h2>
+    <table>
+      <thead><tr><th>Job ID</th><th>Worker</th><th>Status</th><th>Attempt</th><th>Started</th><th>Duration</th><th>Error</th></tr></thead>
+      <tbody id="execs-tbody"></tbody>
+    </table>
+  </div>
+
+  <!-- Workers -->
+  <div class="section">
+    <h2>Active Workers</h2>
+    <div class="workers-grid" id="workers-grid"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const API = '/api/v1';
+
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  return r.json();
+}
+
+function badge(status) {
+  return `<span class="badge badge-${status}">${status}</span>`;
+}
+
+function fmtTime(t) {
+  if (!t) return '—';
+  return new Date(t).toLocaleString();
+}
+
+function duration(start, end) {
+  if (!start || !end) return '—';
+  const ms = new Date(end) - new Date(start);
+  return ms < 1000 ? ms + 'ms' : (ms/1000).toFixed(1) + 's';
+}
+
+function toast(msg, color='#34d399') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.borderColor = color;
+  el.style.display = 'block';
+  setTimeout(() => el.style.display='none', 3000);
+}
+
+async function loadStats() {
+  const d = await api('GET', '/stats');
+  const j = d.jobs || {};
+  document.getElementById('stats').innerHTML = `
+    <div class="stat-card"><div class="label">Total Jobs</div><div class="value blue">${j.total_jobs||0}</div></div>
+    <div class="stat-card"><div class="label">Active</div><div class="value green">${j.active_jobs||0}</div></div>
+    <div class="stat-card"><div class="label">Paused</div><div class="value yellow">${j.paused_jobs||0}</div></div>
+    <div class="stat-card"><div class="label">Queue Depth</div><div class="value blue">${d.queue_length||0}</div></div>
+    <div class="stat-card"><div class="label">Executions</div><div class="value blue">${j.total_executions||0}</div></div>
+    <div class="stat-card"><div class="label">Successes</div><div class="value green">${j.successful_executions||0}</div></div>
+    <div class="stat-card"><div class="label">Failures</div><div class="value red">${j.failed_executions||0}</div></div>
+    <div class="stat-card"><div class="label">Dead Letters</div><div class="value red">${j.dead_letters||0}</div></div>
+    <div class="stat-card"><div class="label">Workers</div><div class="value green">${d.active_workers||0}</div></div>
+  `;
+}
+
+async function loadJobs() {
+  const d = await api('GET', '/jobs?limit=50');
+  const jobs = d.jobs || [];
+  document.getElementById('jobs-tbody').innerHTML = jobs.map(j => `
+    <tr>
+      <td>${j.name}</td>
+      <td><code>${j.cron_expr}</code></td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">${j.command}</td>
+      <td>${badge(j.status)}</td>
+      <td>${fmtTime(j.next_run_at)}</td>
+      <td>
+        <button class="btn btn-primary btn-sm" onclick="trigger('${j.id}')">▶ Run</button>
+        ${j.status==='active'
+          ? `<button class="btn btn-sm" style="background:#78350f;color:#fbbf24" onclick="pause('${j.id}')">⏸ Pause</button>`
+          : `<button class="btn btn-sm" style="background:#064e3b;color:#34d399" onclick="resume('${j.id}')">▶ Resume</button>`}
+        <button class="btn btn-danger btn-sm" onclick="del('${j.id}')">✕</button>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" style="text-align:center;color:#64748b;padding:2rem">No jobs yet</td></tr>';
+}
+
+async function loadExecutions() {
+  const d = await api('GET', '/executions?limit=30');
+  const execs = d.executions || [];
+  document.getElementById('execs-tbody').innerHTML = execs.map(e => `
+    <tr>
+      <td style="font-family:monospace;font-size:0.75rem">${e.job_id.slice(0,8)}…</td>
+      <td>${e.worker_id||'—'}</td>
+      <td>${badge(e.status)}</td>
+      <td>${e.attempt}</td>
+      <td>${fmtTime(e.started_at)}</td>
+      <td>${duration(e.started_at, e.finished_at)}</td>
+      <td style="color:#f87171;font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">${e.error||''}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" style="text-align:center;color:#64748b;padding:2rem">No executions yet</td></tr>';
+}
+
+async function loadWorkers() {
+  const d = await api('GET', '/workers');
+  const workers = d.workers || [];
+  document.getElementById('workers-grid').innerHTML = workers.map(w => `
+    <div class="worker-card">
+      <div class="worker-id"><span class="dot dot-green"></span>${w.id}</div>
+      <div class="worker-host">${w.hostname}</div>
+      <div class="worker-jobs">${w.jobs_handled} jobs handled</div>
+      <div class="worker-jobs">Last seen: ${fmtTime(w.last_seen)}</div>
+    </div>
+  `).join('') || '<div style="color:#64748b;font-size:0.875rem">No active workers</div>';
+}
+
+async function loadAll() {
+  await Promise.all([loadStats(), loadJobs(), loadExecutions(), loadWorkers()]);
+}
+
+async function createJob() {
+  const name = document.getElementById('job-name').value.trim();
+  const cronExpr = document.getElementById('job-cron').value.trim();
+  const command = document.getElementById('job-cmd').value.trim();
+  const maxRetries = parseInt(document.getElementById('job-retries').value)||3;
+  if (!name || !cronExpr || !command) { toast('Fill all fields', '#f87171'); return; }
+  const r = await api('POST', '/jobs', {name, cron_expr: cronExpr, command, max_retries: maxRetries, timeout_seconds: 300});
+  if (r.id) { toast('Job created ✓'); loadAll(); }
+  else toast('Error: '+(r.error||'unknown'), '#f87171');
+}
+
+async function trigger(id) {
+  await api('POST', `/jobs/${id}/trigger`);
+  toast('Job triggered ✓');
+  setTimeout(loadAll, 500);
+}
+async function pause(id) { await api('POST', `/jobs/${id}/pause`); loadJobs(); }
+async function resume(id) { await api('POST', `/jobs/${id}/resume`); loadJobs(); }
+async function del(id) {
+  if (!confirm('Delete this job?')) return;
+  await api('DELETE', `/jobs/${id}`);
+  loadAll();
+}
+
+loadAll();
+setInterval(loadAll, 10000);
+</script>
+</body>
+</html>
