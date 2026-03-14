@@ -554,8 +554,8 @@ func TestListWorkers_Empty(t *testing.T) {
 func TestListWorkers_WithWorkers(t *testing.T) {
 	queue := &fakeQueueStore{
 		workers: []*models.WorkerInfo{
-			{ID: "w1", Hostname: "host-1", JobsHandled: 42, IsAlive: true},
-			{ID: "w2", Hostname: "host-2", JobsHandled: 10, IsAlive: true},
+			{ID: "w1", Hostname: "host-1", JobsHandled: 42, Status: "active"},
+			{ID: "w2", Hostname: "host-2", JobsHandled: 10, Status: "active"},
 		},
 	}
 	router := newTestRouter(newFakeJobStore(), queue)

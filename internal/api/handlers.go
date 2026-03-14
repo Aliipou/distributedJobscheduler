@@ -23,6 +23,7 @@ func NewHandler(pg store.JobStore, r store.QueueStore, log *zap.Logger) *Handler
 }
 
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
+	r.Use(CORS())
 	v1 := r.Group("/api/v1")
 	{
 		jobs := v1.Group("/jobs")
