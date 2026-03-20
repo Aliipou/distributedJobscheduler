@@ -80,7 +80,7 @@ func (s *Scheduler) scheduleJob(ctx context.Context, job *models.Job, now time.T
 		s.log.Debug("job already locked, skipping", zap.String("job_id", job.ID))
 		return nil
 	}
-	defer s.redis.ReleaseJobLock(ctx, job.ID)
+	defer func() { _ = s.redis.ReleaseJobLock(ctx, job.ID) }()
 
 	// Compute next run time
 	nextRun, err := NextRun(job.CronExpr, now)

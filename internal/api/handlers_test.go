@@ -333,7 +333,9 @@ func TestListJobs_Empty(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["total"].(float64) != 0 {
 		t.Errorf("expected total=0, got %v", resp["total"])
 	}
@@ -351,7 +353,9 @@ func TestListJobs_WithJobs(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["total"].(float64) != 2 {
 		t.Errorf("expected total=2, got %v", resp["total"])
 	}
@@ -380,7 +384,9 @@ func TestGetJob_Found(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	var resp models.Job
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp.ID != "job-1" {
 		t.Errorf("id: got %q, want job-1", resp.ID)
 	}
