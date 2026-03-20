@@ -48,7 +48,7 @@ func TestExecuteHTTP_Success(t *testing.T) {
 			t.Errorf("expected application/json content-type")
 		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer srv.Close()
 
