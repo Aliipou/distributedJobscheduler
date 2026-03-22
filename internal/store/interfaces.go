@@ -26,8 +26,8 @@ type JobStore interface {
 // QueueStore is the queue interface used by the HTTP handler and scheduler.
 // RedisStore satisfies this interface.
 type QueueStore interface {
-	AcquireJobLock(ctx context.Context, jobID string) (bool, error)
-	ReleaseJobLock(ctx context.Context, jobID string) error
+	AcquireJobLock(ctx context.Context, jobID string, ownerID string) (bool, error)
+	ReleaseJobLock(ctx context.Context, jobID string, ownerID string) error
 	EnqueueJob(ctx context.Context, job *models.QueuedJob) error
 	DequeueJob(ctx context.Context, timeout time.Duration) (*models.QueuedJob, error)
 	EnqueueDeadLetter(ctx context.Context, job *models.QueuedJob) error

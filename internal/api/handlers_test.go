@@ -172,11 +172,11 @@ type fakeQueueStore struct {
 	err     error
 }
 
-func (f *fakeQueueStore) AcquireJobLock(_ context.Context, _ string) (bool, error) {
+func (f *fakeQueueStore) AcquireJobLock(_ context.Context, _ string, _ string) (bool, error) {
 	return true, f.err
 }
 
-func (f *fakeQueueStore) ReleaseJobLock(_ context.Context, _ string) error { return f.err }
+func (f *fakeQueueStore) ReleaseJobLock(_ context.Context, _ string, _ string) error { return f.err }
 
 func (f *fakeQueueStore) EnqueueJob(_ context.Context, job *models.QueuedJob) error {
 	if f.err != nil {

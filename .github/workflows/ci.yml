@@ -34,8 +34,8 @@ jobs:
           cache: true
       - run: go mod download
       - run: go build ./...
-      - run: go vet ./... || true
-      - run: go test ./... -v -timeout 120s || true
+      - run: go vet ./...
+      - run: go test ./... -v -timeout 120s
         env:
           REDIS_URL: redis://localhost:6379
           DATABASE_URL: postgresql://test:test@localhost:5432/test_db

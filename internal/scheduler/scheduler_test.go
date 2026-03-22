@@ -57,11 +57,11 @@ type fakeRedis struct {
 	enqErr  error
 }
 
-func (f *fakeRedis) AcquireJobLock(_ context.Context, _ string) (bool, error) {
+func (f *fakeRedis) AcquireJobLock(_ context.Context, _ string, _ string) (bool, error) {
 	return true, f.lockErr
 }
 
-func (f *fakeRedis) ReleaseJobLock(_ context.Context, _ string) error { return nil }
+func (f *fakeRedis) ReleaseJobLock(_ context.Context, _ string, _ string) error { return nil }
 
 func (f *fakeRedis) EnqueueJob(_ context.Context, job *models.QueuedJob) error {
 	if f.enqErr != nil {

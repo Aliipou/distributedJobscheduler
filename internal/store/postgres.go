@@ -2,14 +2,17 @@ package store
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/aliipou/distributed-job-scheduler/internal/models"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+//go:embed migrations/001_init.sql
+var migrationSQL string
 
 type PostgresStore struct {
 	pool *pgxpool.Pool
@@ -27,11 +30,7 @@ func NewPostgresStore(ctx context.Context, connStr string) (*PostgresStore, erro
 }
 
 func (s *PostgresStore) Migrate(ctx context.Context) error {
-	sql, err := os.ReadFile("internal/store/migrations/001_init.sql")
-	if err != nil {
-		return fmt.Errorf("read migration: %w", err)
-	}
-	_, err = s.pool.Exec(ctx, string(sql))
+	_, err := s.pool.Exec(ctx, migrationSQL)
 	return err
 }
 

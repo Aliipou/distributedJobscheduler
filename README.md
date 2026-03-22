@@ -4,10 +4,10 @@
 
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&amp;logo=go&amp;logoColor=white)](https://golang.org)
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D?style=flat&amp;logo=redis&amp;logoColor=white)](https://redis.io)
-[![gRPC](https://img.shields.io/badge/gRPC-1.x-244c5a?style=flat&amp;logo=google)](https://grpc.io)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-4169E1?style=flat&amp;logo=postgresql&amp;logoColor=white)](https://postgresql.org)
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat)](LICENSE)
 
-**Distributed job scheduler with Redis-backed queues, worker pools, and fault-tolerant execution.**
+**Distributed job scheduler with Redis-backed queues, Postgres persistence, worker pools, and fault-tolerant execution. REST API via Gin.**
 
 </div>
 
@@ -19,13 +19,13 @@ This scheduler is built for production workloads where losing a job is not accep
 
 ## Design Principles
 
-**Reliability first.** Every job is persisted in Redis before a worker claims it. If a worker crashes mid-execution, the job is automatically requeued after a configurable timeout.
+**Reliability first.** Every job is persisted in PostgreSQL and enqueued in Redis. If a worker crashes mid-execution, the job can be requeued after a configurable timeout.
 
-**Priority scheduling.** Jobs enter priority queues. Critical jobs always run before batch jobs, regardless of submission order.
+**Cron-based scheduling.** Jobs are defined with cron expressions and automatically scheduled when due.
 
-**Horizontal scaling.** Workers are stateless. Add more workers by starting more processes — no coordination required.
+**Horizontal scaling.** Workers are stateless. Add more workers by starting more processes -- no coordination required.
 
-**Observability.** Every state transition (queued, running, succeeded, failed, retried) is emitted as a structured log event and a Prometheus metric.
+**Observability.** Every state transition (queued, running, succeeded, failed, retried) is emitted as a structured log event.
 
 ## Architecture
 
@@ -33,19 +33,22 @@ This scheduler is built for production workloads where losing a job is not accep
 Job Producers
      |
      v
-[gRPC API]           Submit jobs, query status, cancel
+[REST API (Gin)]     Create jobs, query status, trigger, pause/resume
      |
      v
-[Redis Queues]       Priority queues (critical / default / batch)
-     |    ^
-     v    |          Atomic LPUSH/BRPOPLPUSH for safe handoff
+[PostgreSQL]         Job definitions, execution history, cron state
+     |
+     v
+[Scheduler Loop]     Polls for due jobs, enqueues to Redis
+     |
+     v
+[Redis Queue]        FIFO job queue with distributed locking
+     |
+     v
 [Worker Pool]        N stateless workers, configurable concurrency
      |
      v
-[Result Store]       Job outcomes persisted in Redis with TTL
-     |
-     v
-[Metrics + Logs]     Prometheus counters, structured JSON logs
+[Execution Store]    Results persisted in PostgreSQL
 ```
 
 ## Quick Start
@@ -54,26 +57,36 @@ Job Producers
 git clone https://github.com/Aliipou/distributedJobscheduler.git
 cd distributedJobscheduler
 
-# Start Redis
-docker run -d -p 6379:6379 redis:7-alpine
+# Start dependencies
+docker compose -f deployments/docker-compose.yml up -d
+
+# Start the scheduler + API server
+go run cmd/scheduler/main.go
 
 # Start workers (run multiple for scale)
-go run cmd/worker/main.go --concurrency 10 --queues critical,default,batch
+go run cmd/worker/main.go
 
-# Submit a job
-go run cmd/submit/main.go --type email --payload '{"to":"user@example.com","subject":"Hello"}'
+# Create a job via the REST API
+curl -X POST http://localhost:8080/api/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-job","cron_expr":"*/5 * * * *","command":"echo hello"}'
 ```
 
-## gRPC API
+## REST API
 
-```protobuf
-service Scheduler {
-  rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
-  rpc GetJobStatus(GetJobStatusRequest) returns (JobStatus);
-  rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
-  rpc ListJobs(ListJobsRequest) returns (stream JobStatus);
-}
-```
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/jobs` | Create a new job |
+| GET | `/api/v1/jobs` | List all jobs |
+| GET | `/api/v1/jobs/:id` | Get job details |
+| DELETE | `/api/v1/jobs/:id` | Delete a job |
+| POST | `/api/v1/jobs/:id/trigger` | Manually trigger a job |
+| POST | `/api/v1/jobs/:id/pause` | Pause a job |
+| POST | `/api/v1/jobs/:id/resume` | Resume a paused job |
+| GET | `/api/v1/jobs/:id/executions` | List executions for a job |
+| GET | `/api/v1/executions` | List all executions |
+| GET | `/api/v1/workers` | List active workers |
+| GET | `/api/v1/stats` | Get system stats |
 
 ## Job Lifecycle
 
@@ -89,35 +102,18 @@ Submitted -> Queued -> Running -> Succeeded
 
 ## Configuration
 
-```yaml
-redis:
-  url: redis://localhost:6379
-  pool_size: 20
+Environment variables:
 
-workers:
-  concurrency: 10
-  queues: [critical, default, batch]
-  poll_interval: 500ms
-
-jobs:
-  default_timeout: 30s
-  max_retries: 3
-  retry_backoff: exponential
-  dead_letter_ttl: 7d
-
-metrics:
-  enabled: true
-  port: 9090
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
+| `DATABASE_URL` | | PostgreSQL connection string |
+| `HTTP_PORT` | `8080` | API server port |
+| `SCHEDULE_INTERVAL` | `10s` | How often the scheduler checks for due jobs |
 
 ## Performance
 
-| Metric | Value |
-|--------|-------|
-| Throughput | 10,000+ jobs/sec (single Redis node) |
-| Latency (enqueue) | < 1ms p99 |
-| Latency (dequeue) | < 2ms p99 |
-| Worker startup | < 100ms |
+Formal benchmarks have not been run yet. See [BENCHMARKS.md](BENCHMARKS.md) for plans.
 
 ## License
 

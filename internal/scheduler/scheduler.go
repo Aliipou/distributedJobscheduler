@@ -18,8 +18,8 @@ type jobDB interface {
 
 // jobQueue is the subset of RedisStore methods used by the scheduler.
 type jobQueue interface {
-	AcquireJobLock(ctx context.Context, jobID string) (bool, error)
-	ReleaseJobLock(ctx context.Context, jobID string) error
+	AcquireJobLock(ctx context.Context, jobID string, ownerID string) (bool, error)
+	ReleaseJobLock(ctx context.Context, jobID string, ownerID string) error
 	EnqueueJob(ctx context.Context, job *models.QueuedJob) error
 }
 
@@ -71,8 +71,11 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) {
 }
 
 func (s *Scheduler) scheduleJob(ctx context.Context, job *models.Job, now time.Time) error {
-	// Acquire distributed lock to prevent double-scheduling
-	acquired, err := s.redis.AcquireJobLock(ctx, job.ID)
+	// Acquire distributed lock to prevent double-scheduling.
+	// The ownerID is a unique ID per scheduling attempt so that only the holder
+	// can release the lock (see the Lua script in RedisStore.ReleaseJobLock).
+	ownerID := uuid.New().String()
+	acquired, err := s.redis.AcquireJobLock(ctx, job.ID, ownerID)
 	if err != nil {
 		return err
 	}
@@ -80,7 +83,7 @@ func (s *Scheduler) scheduleJob(ctx context.Context, job *models.Job, now time.T
 		s.log.Debug("job already locked, skipping", zap.String("job_id", job.ID))
 		return nil
 	}
-	defer func() { _ = s.redis.ReleaseJobLock(ctx, job.ID) }()
+	defer func() { _ = s.redis.ReleaseJobLock(ctx, job.ID, ownerID) }()
 
 	// Compute next run time
 	nextRun, err := NextRun(job.CronExpr, now)

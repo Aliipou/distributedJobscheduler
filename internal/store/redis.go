@@ -42,16 +42,36 @@ func (r *RedisStore) Close() error {
 }
 
 // AcquireJobLock tries to acquire a distributed lock for scheduling a job.
+// The lock value is set to ownerID so that only the lock holder can release it.
 // Returns true if the lock was acquired.
-func (r *RedisStore) AcquireJobLock(ctx context.Context, jobID string) (bool, error) {
+func (r *RedisStore) AcquireJobLock(ctx context.Context, jobID string, ownerID string) (bool, error) {
 	key := lockPrefix + jobID
-	ok, err := r.client.SetNX(ctx, key, "1", lockTTL).Result()
+	ok, err := r.client.SetNX(ctx, key, ownerID, lockTTL).Result()
 	return ok, err
 }
 
-// ReleaseJobLock releases the distributed lock for a job.
-func (r *RedisStore) ReleaseJobLock(ctx context.Context, jobID string) error {
-	return r.client.Del(ctx, lockPrefix+jobID).Err()
+// releaseJobLockScript is a Lua script that releases a lock only if the caller
+// owns it. This prevents a worker from accidentally releasing a lock that was
+// re-acquired by another worker after the original TTL expired.
+var releaseJobLockScript = redis.NewScript(`
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+	return redis.call("DEL", KEYS[1])
+end
+return 0
+`)
+
+// ReleaseJobLock releases the distributed lock for a job, but only if ownerID
+// matches the value that was set during AcquireJobLock. This avoids a race
+// condition where a slow worker deletes a lock that a different worker has
+// since re-acquired.
+func (r *RedisStore) ReleaseJobLock(ctx context.Context, jobID string, ownerID string) error {
+	key := lockPrefix + jobID
+	_, err := releaseJobLockScript.Run(ctx, r.client, []string{key}, ownerID).Result()
+	if err == redis.Nil {
+		// Lock was not held by this owner; treat as a no-op.
+		return nil
+	}
+	return err
 }
 
 // EnqueueJob pushes a job to the Redis queue.
@@ -98,20 +118,28 @@ func (r *RedisStore) RegisterWorker(ctx context.Context, info *models.WorkerInfo
 }
 
 // GetWorkers returns all active workers.
+// Uses SCAN instead of KEYS to avoid blocking Redis on large keyspaces.
 func (r *RedisStore) GetWorkers(ctx context.Context) ([]*models.WorkerInfo, error) {
-	keys, err := r.client.Keys(ctx, workerPrefix+"*").Result()
-	if err != nil {
-		return nil, err
-	}
 	var workers []*models.WorkerInfo
-	for _, key := range keys {
-		val, err := r.client.Get(ctx, key).Result()
+	var cursor uint64
+	for {
+		keys, next, err := r.client.Scan(ctx, cursor, workerPrefix+"*", 100).Result()
 		if err != nil {
-			continue
+			return nil, err
 		}
-		var w models.WorkerInfo
-		if err := json.Unmarshal([]byte(val), &w); err == nil {
-			workers = append(workers, &w)
+		for _, key := range keys {
+			val, err := r.client.Get(ctx, key).Result()
+			if err != nil {
+				continue
+			}
+			var w models.WorkerInfo
+			if err := json.Unmarshal([]byte(val), &w); err == nil {
+				workers = append(workers, &w)
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
 		}
 	}
 	return workers, nil
