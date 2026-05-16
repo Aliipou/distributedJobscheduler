@@ -90,7 +90,9 @@ func (w *Worker) handle(ctx context.Context, job *models.QueuedJob) {
 		return
 	}
 
-	_ = w.pg.UpdateExecutionStatus(ctx, exec.ID, models.ExecStatusRunning)
+	if err := w.pg.UpdateExecutionStatus(ctx, exec.ID, models.ExecStatusRunning); err != nil {
+		w.log.Warn("update execution status to running", zap.String("exec_id", exec.ID), zap.Error(err))
+	}
 
 	output, execErr := executeCommand(ctx, job.Command, job.Payload, job.TimeoutSec)
 
@@ -110,20 +112,28 @@ func (w *Worker) handle(ctx context.Context, job *models.QueuedJob) {
 			if err := w.redis.EnqueueJob(ctx, job); err != nil {
 				w.log.Error("re-enqueue job", zap.Error(err))
 			}
-			_ = w.pg.UpdateExecution(ctx, exec.ID, models.ExecStatusFailed, output, execErr.Error())
+			if err := w.pg.UpdateExecution(ctx, exec.ID, models.ExecStatusFailed, output, execErr.Error()); err != nil {
+				w.log.Warn("update execution status to failed", zap.String("exec_id", exec.ID), zap.Error(err))
+			}
 		} else {
 			w.log.Error("job exhausted retries, moving to dead letter",
 				zap.String("job_id", job.JobID),
 				zap.Int("attempts", job.Attempt),
 			)
-			_ = w.redis.EnqueueDeadLetter(ctx, job)
-			_ = w.pg.UpdateExecution(ctx, exec.ID, models.ExecStatusDeadLetter, output, execErr.Error())
+			if err := w.redis.EnqueueDeadLetter(ctx, job); err != nil {
+				w.log.Error("enqueue dead letter", zap.String("job_id", job.JobID), zap.Error(err))
+			}
+			if err := w.pg.UpdateExecution(ctx, exec.ID, models.ExecStatusDeadLetter, output, execErr.Error()); err != nil {
+				w.log.Warn("update execution status to dead letter", zap.String("exec_id", exec.ID), zap.Error(err))
+			}
 		}
 		return
 	}
 
 	w.jobsHandled.Add(1)
-	_ = w.pg.UpdateExecution(ctx, exec.ID, models.ExecStatusSuccess, output, "")
+	if err := w.pg.UpdateExecution(ctx, exec.ID, models.ExecStatusSuccess, output, ""); err != nil {
+		w.log.Warn("update execution status to success", zap.String("exec_id", exec.ID), zap.Error(err))
+	}
 	w.log.Info("job succeeded",
 		zap.String("job_id", job.JobID),
 		zap.String("exec_id", exec.ID),
