@@ -15,8 +15,10 @@ const (
 	deadLetterKey  = "scheduler:queue:dead"
 	workerPrefix   = "scheduler:worker:"
 	lockPrefix     = "scheduler:lock:job:"
+	pendingPrefix  = "scheduler:pending_next_run:"
 	lockTTL        = 30 * time.Second
 	workerTTL      = 15 * time.Second
+	pendingTTL     = 5 * time.Minute
 )
 
 type RedisStore struct {
@@ -53,12 +55,7 @@ func (r *RedisStore) AcquireJobLock(ctx context.Context, jobID string, ownerID s
 // releaseJobLockScript is a Lua script that releases a lock only if the caller
 // owns it. This prevents a worker from accidentally releasing a lock that was
 // re-acquired by another worker after the original TTL expired.
-var releaseJobLockScript = redis.NewScript(`
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-	return redis.call("DEL", KEYS[1])
-end
-return 0
-`)
+var releaseJobLockScript = redis.NewScript()
 
 // ReleaseJobLock releases the distributed lock for a job, but only if ownerID
 // matches the value that was set during AcquireJobLock. This avoids a race
@@ -74,7 +71,70 @@ func (r *RedisStore) ReleaseJobLock(ctx context.Context, jobID string, ownerID s
 	return err
 }
 
+// enqueueJobAtomicScript atomically:
+//   1. Pushes the serialised job payload onto the job queue (LPUSH).
+//   2. Sets a "pending next-run" key that records the next scheduled time.
+//
+// Both operations succeed or fail together, so a crash between EnqueueJob and
+// UpdateNextRun can no longer cause the job to be executed twice. The scheduler
+// checks for the pending key before re-enqueuing (see HasPendingNextRun).
+//
+// KEYS[1] = job queue key
+// KEYS[2] = pending next-run key (scheduler:pending_next_run:<jobID>)
+// ARGV[1] = serialised job JSON
+// ARGV[2] = next-run Unix nanoseconds (string)
+// ARGV[3] = pending key TTL in seconds
+var enqueueJobAtomicScript = redis.NewScript()
+
+// EnqueueJobAtomic atomically pushes a job onto the queue and records the
+// next-run time in Redis. Both operations are wrapped in a single Lua script
+// so they are executed atomically by the Redis server: either both happen or
+// neither does. The caller must still update next_run_at in Postgres
+// afterwards, but if that update is lost the pending-key prevents the
+// scheduler from re-enqueueing the same job on the next tick.
+func (r *RedisStore) EnqueueJobAtomic(ctx context.Context, job *models.QueuedJob, nextRun time.Time) error {
+	data, err := json.Marshal(job)
+	if err != nil {
+		return err
+	}
+	pendingKey := pendingPrefix + job.JobID
+	ttlSec := int64(pendingTTL.Seconds())
+	_, err = enqueueJobAtomicScript.Run(
+		ctx, r.client,
+		[]string{jobQueueKey, pendingKey},
+		string(data),
+		nextRun.UnixNano(),
+		ttlSec,
+	).Result()
+	return err
+}
+
+// HasPendingNextRun returns true when the atomic enqueue step completed but the
+// Postgres UpdateNextRun has not yet been confirmed. The scheduler calls this
+// before deciding to enqueue a job so it can skip jobs that are already in the
+// queue after a partial failure.
+func (r *RedisStore) HasPendingNextRun(ctx context.Context, jobID string) (bool, error) {
+	key := pendingPrefix + jobID
+	err := r.client.Get(ctx, key).Err()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ClearPendingNextRun removes the pending next-run marker for a job. The
+// scheduler calls this after UpdateNextRun in Postgres succeeds.
+func (r *RedisStore) ClearPendingNextRun(ctx context.Context, jobID string) error {
+	key := pendingPrefix + jobID
+	return r.client.Del(ctx, key).Err()
+}
+
 // EnqueueJob pushes a job to the Redis queue.
+// Deprecated: prefer EnqueueJobAtomic when the next-run time is available
+// (i.e. in the scheduler). This method is kept for re-queue on retry.
 func (r *RedisStore) EnqueueJob(ctx context.Context, job *models.QueuedJob) error {
 	data, err := json.Marshal(job)
 	if err != nil {
