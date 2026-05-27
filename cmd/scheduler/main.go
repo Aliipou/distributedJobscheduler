@@ -14,19 +14,22 @@ import (
 	"github.com/aliipou/distributed-job-scheduler/internal/scheduler"
 	"github.com/aliipou/distributed-job-scheduler/internal/store"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "load config: %v
+", err)
 		os.Exit(1)
 	}
 
 	log, err := zap.NewProduction()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "init logger: %v\n", err)
+		fmt.Fprintf(os.Stderr, "init logger: %v
+", err)
 		os.Exit(1)
 	}
 	defer func() { _ = log.Sync() }()
@@ -63,6 +66,9 @@ func main() {
 
 	handler := api.NewHandler(pg, redis, log)
 	handler.RegisterRoutes(engine)
+
+	// Prometheus metrics endpoint
+	engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.HTTPPort),
