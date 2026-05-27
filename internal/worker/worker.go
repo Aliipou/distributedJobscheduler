@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aliipou/distributed-job-scheduler/internal/metrics"
 	"github.com/aliipou/distributed-job-scheduler/internal/models"
 	"github.com/aliipou/distributed-job-scheduler/internal/store"
 	"go.uber.org/zap"
@@ -94,7 +95,12 @@ func (w *Worker) handle(ctx context.Context, job *models.QueuedJob) {
 		w.log.Warn("update execution status to running", zap.String("exec_id", exec.ID), zap.Error(err))
 	}
 
+	start := time.Now()
 	output, execErr := executeCommand(ctx, job.Command, job.Payload, job.TimeoutSec)
+	duration := time.Since(start).Seconds()
+
+	// Record duration histogram for every execution attempt.
+	metrics.JobDuration.WithLabelValues(job.JobID).Observe(duration)
 
 	if execErr != nil {
 		w.log.Warn("job failed",
@@ -102,6 +108,8 @@ func (w *Worker) handle(ctx context.Context, job *models.QueuedJob) {
 			zap.Int("attempt", job.Attempt),
 			zap.Error(execErr),
 		)
+
+		metrics.JobsExecuted.WithLabelValues(job.JobID, "failed").Inc()
 
 		if job.Attempt < job.MaxRetries {
 			// Exponential backoff re-queue
@@ -120,6 +128,7 @@ func (w *Worker) handle(ctx context.Context, job *models.QueuedJob) {
 				zap.String("job_id", job.JobID),
 				zap.Int("attempts", job.Attempt),
 			)
+			metrics.JobsFailed.WithLabelValues(job.JobID).Inc()
 			if err := w.redis.EnqueueDeadLetter(ctx, job); err != nil {
 				w.log.Error("enqueue dead letter", zap.String("job_id", job.JobID), zap.Error(err))
 			}
@@ -130,6 +139,7 @@ func (w *Worker) handle(ctx context.Context, job *models.QueuedJob) {
 		return
 	}
 
+	metrics.JobsExecuted.WithLabelValues(job.JobID, "success").Inc()
 	w.jobsHandled.Add(1)
 	if err := w.pg.UpdateExecution(ctx, exec.ID, models.ExecStatusSuccess, output, ""); err != nil {
 		w.log.Warn("update execution status to success", zap.String("exec_id", exec.ID), zap.Error(err))
