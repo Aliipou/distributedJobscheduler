@@ -28,6 +28,18 @@ type JobStore interface {
 type QueueStore interface {
 	AcquireJobLock(ctx context.Context, jobID string, ownerID string) (bool, error)
 	ReleaseJobLock(ctx context.Context, jobID string, ownerID string) error
+	// EnqueueJobAtomic atomically enqueues the job payload AND records the
+	// next-run time in Redis, preventing duplicate execution when a crash
+	// occurs between the Redis enqueue and the Postgres UpdateNextRun call.
+	EnqueueJobAtomic(ctx context.Context, job *models.QueuedJob, nextRun time.Time) error
+	// HasPendingNextRun reports whether an atomic-enqueue marker exists for the
+	// given job, meaning the job was already pushed to the queue but Postgres
+	// may not yet reflect the updated next_run_at.
+	HasPendingNextRun(ctx context.Context, jobID string) (bool, error)
+	// ClearPendingNextRun removes the pending-marker after Postgres is updated.
+	ClearPendingNextRun(ctx context.Context, jobID string) error
+	// EnqueueJob is used for worker-side retry re-queues where no next-run
+	// update is needed.
 	EnqueueJob(ctx context.Context, job *models.QueuedJob) error
 	DequeueJob(ctx context.Context, timeout time.Duration) (*models.QueuedJob, error)
 	EnqueueDeadLetter(ctx context.Context, job *models.QueuedJob) error
